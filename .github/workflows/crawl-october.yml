@@ -18,17 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Crawl festival sources
         env:
           TARGET_MONTH: ${{ inputs.month }}
         run: |
           python - <<'PY'
-          import hashlib
-          import html
-          import json
-          import os
-          import re
+          import hashlib, html, json, os, re
           from datetime import datetime, timezone
           from pathlib import Path
           from urllib.parse import urljoin, urlparse
@@ -42,9 +37,9 @@ jobs:
           if not 1 <= month <= 12:
               raise SystemExit(f"invalid month: {target}")
 
-          domain_file = Path("domain.yaml")
+          domain_file = Path("data/domain.yaml")
           if not domain_file.exists():
-              raise SystemExit("domain.yaml is required")
+              raise SystemExit("data/domain.yaml is required")
 
           urls = []
           for line in domain_file.read_text(encoding="utf-8").splitlines():
@@ -53,31 +48,22 @@ jobs:
                   url = line.split(":", 1)[1].strip().strip('"').strip("'")
                   if url.startswith(("http://", "https://")):
                       urls.append(url)
-
           if not urls:
-              raise SystemExit("no source URLs in domain.yaml")
+              raise SystemExit("no source URLs in data/domain.yaml")
 
           out = Path("data/monthly") / f"{target}.jsonl"
           out.parent.mkdir(parents=True, exist_ok=True)
-
-          month_patterns = [
-              rf"{year}年{month}月",
-              rf"{month}月",
-              rf"{year}[-/.]{month:02d}",
-              rf"{year}[-/.]{month}(?!\d)",
-              rf"\b{month:02d}/",
-              rf"\b{month}/",
-          ]
-          month_re = re.compile("|".join(month_patterns), re.I)
-          seen = set()
-          rows = []
+          month_re = re.compile(
+              rf"{year}年{month}月|{month}月|{year}[-/.]{month:02d}|"
+              rf"{year}[-/.]{month}(?!\d)|\b{month:02d}/|\b{month}/", re.I
+          )
 
           def fetch(url):
               req = Request(url, headers={"User-Agent": "bonsai-festivals-monthly-crawler/1.0"})
               with urlopen(req, timeout=20) as r:
                   return r.read().decode("utf-8", "ignore")
 
-          def strip_html(src):
+          def text(src):
               src = re.sub(r"(?is)<script.*?</script>|<style.*?</style>|<noscript.*?</noscript>", " ", src)
               src = re.sub(r"(?s)<[^>]+>", " ", src)
               return re.sub(r"\s+", " ", html.unescape(src)).strip()
@@ -85,12 +71,12 @@ jobs:
           def links(src, base):
               found = []
               for href in re.findall(r'''href=["']([^"']+)["']''', src, re.I):
-                  u = urljoin(base, href)
-                  p = urlparse(u)
-                  if p.scheme in ("http", "https") and p.netloc == urlparse(base).netloc:
-                      found.append(u.split("#", 1)[0])
+                  u = urljoin(base, href).split("#", 1)[0]
+                  if urlparse(u).netloc == urlparse(base).netloc:
+                      found.append(u)
               return list(dict.fromkeys(found))[:30]
 
+          rows, seen = [], set()
           for source in urls:
               try:
                   home = fetch(source)
@@ -98,28 +84,22 @@ jobs:
               except Exception as e:
                   print(f"source failed: {source}: {e}")
                   continue
-
               for page in candidates:
                   try:
                       raw = home if page == source else fetch(page)
                   except Exception as e:
                       print(f"page failed: {page}: {e}")
                       continue
-
-                  text = strip_html(raw)
-                  match = month_re.search(text)
-                  if not match:
+                  body = text(raw)
+                  m = month_re.search(body)
+                  if not m:
                       continue
-
-                  title_match = re.search(r"(?is)<title[^>]*>(.*?)</title>", raw)
-                  title = strip_html(title_match.group(1)) if title_match else ""
-                  snippet = text[max(0, match.start()-220):match.end()+320]
-
                   key = hashlib.sha256(page.encode()).hexdigest()[:16]
                   if key in seen:
                       continue
                   seen.add(key)
-
+                  tm = re.search(r"(?is)<title[^>]*>(.*?)</title>", raw)
+                  title = text(tm.group(1)) if tm else ""
                   rows.append({
                       "id": f"{target}-{key}",
                       "month": target,
@@ -127,19 +107,15 @@ jobs:
                       "type": "festival",
                       "official_url": page,
                       "source_url": source,
-                      "month_evidence": match.group(0),
-                      "snippet": snippet,
-                      "crawled_at": now.isoformat(),
+                      "month_evidence": m.group(0),
+                      "snippet": body[max(0,m.start()-220):m.end()+320],
+                      "crawled_at": now.isoformat()
                   })
 
           rows.sort(key=lambda x: (x["name"], x["official_url"]))
-          out.write_text(
-              "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
-              encoding="utf-8",
-          )
+          out.write_text("".join(json.dumps(x, ensure_ascii=False)+"\n" for x in rows), encoding="utf-8")
           print(f"target={target} sources={len(urls)} records={len(rows)} output={out}")
           PY
-
       - name: Commit monthly data
         run: |
           git config user.name "github-actions[bot]"
