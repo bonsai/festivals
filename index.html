@@ -37,9 +37,9 @@ function render(){
  <div class="features">${esc((x.features||[]).join(' · '))}</div>${x.official_url?`<a href="${esc(x.official_url)}" target="_blank" rel="noopener">公式サイト ↗</a>`:''}</article>`).join('')+'</div>':'<div class="empty">該当する祭り・フェスがありません。</div>';
 }
 async function load(){
- const base=await (await fetch('data/festivals.jsonl')).text(); records.push(...parse(base));
- const now=new Date(), years=[now.getFullYear()-1,now.getFullYear(),now.getFullYear()+1];
- for(const y of years)for(let m=1;m<=12;m++){const key=y+'-'+String(m).padStart(2,'0');try{const r=await fetch('data/monthly/'+key+'.jsonl');if(r.ok)records.push(...parse(await r.text()))}catch{}}
+ const r=await fetch('data/festivals.jsonl');
+ if(!r.ok)throw new Error('festival data: HTTP '+r.status);
+ records.push(...parse(await r.text()));
  const types=[...new Set(records.map(x=>x.type).filter(Boolean))].sort();
  for(const v of types)document.querySelector('#type').insertAdjacentHTML('beforeend',`<option value="${esc(v)}">${esc(v)}</option>`);
  for(let m=1;m<=12;m++)document.querySelector('#month').insertAdjacentHTML('beforeend',`<option value="${m}">${m}月</option>`);
@@ -47,6 +47,7 @@ async function load(){
 }
 document.addEventListener('DOMContentLoaded',()=>{
  ['q','type','month'].forEach(id=>document.querySelector('#'+id)?.addEventListener('input',render));
+ ['q','type','month'].forEach(id=>document.querySelector('#'+id)?.addEventListener('change',render));
  load().catch(e=>{document.querySelector('#status').textContent='error';document.querySelector('#out').innerHTML='<div class="empty">'+esc(e.message)+'</div>'});
 });
 </script>
