@@ -15,13 +15,17 @@ header{display:flex;justify-content:space-between;align-items:end;gap:16px;margi
 </style>
 </head>
 <body>
-<h1>festivals</h1>
-<p class="meta">祭り・フェス 月次データ / GitHub Pages</p>
-<pre id="out">loading...</pre>
+<header><div><h1>festivals</h1><p class="meta">祭り・フェス · 構造化データビュー</p></div><div id="status">loading...</div></header>
+<div class="toolbar">
+<input id="q" placeholder="祭り・地域・特徴を検索">
+<select id="type"><option value="">すべて</option></select>
+<select id="month"><option value="">月</option></select>
+</div>
+<main id="out"><div class="empty">loading...</div></main>
 <script>
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const records=[];
-function parse(text){return text.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean).flatMap(x=>{try{return [JSON.parse(x)]}catch{return []}})}
+function parse(text){return text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean).flatMap(x=>{try{return [JSON.parse(x)]}catch{return []}})}
 function place(x){const l=x.location||{};return [l.country,l.prefecture,l.city,l.area,l.state].filter(Boolean).join(' · ')}
 function render(){
  const q=document.querySelector('#q').value.toLowerCase(), t=document.querySelector('#type').value, m=document.querySelector('#month').value;
@@ -34,14 +38,17 @@ function render(){
 }
 async function load(){
  const base=await (await fetch('data/festivals.jsonl')).text(); records.push(...parse(base));
- const years=[new Date().getFullYear()-1,new Date().getFullYear(),new Date().getFullYear()+1];
+ const now=new Date(), years=[now.getFullYear()-1,now.getFullYear(),now.getFullYear()+1];
  for(const y of years)for(let m=1;m<=12;m++){const key=y+'-'+String(m).padStart(2,'0');try{const r=await fetch('data/monthly/'+key+'.jsonl');if(r.ok)records.push(...parse(await r.text()))}catch{}}
- [...new Set(records.map(x=>x.type).filter(Boolean))].sort().forEach(v=>document.querySelector('#type').insertAdjacentHTML('beforeend',`<option>${esc(v)}</option>`));
+ const types=[...new Set(records.map(x=>x.type).filter(Boolean))].sort();
+ for(const v of types)document.querySelector('#type').insertAdjacentHTML('beforeend',`<option value="${esc(v)}">${esc(v)}</option>`);
  for(let m=1;m<=12;m++)document.querySelector('#month').insertAdjacentHTML('beforeend',`<option value="${m}">${m}月</option>`);
  render();
 }
-['q','type','month'].forEach(id=>document.querySelector('#'+id).addEventListener('input',render));
-load().catch(e=>{document.querySelector('#status').textContent='error';document.querySelector('#out').innerHTML='<div class="empty">'+esc(e.message)+'</div>'});
+document.addEventListener('DOMContentLoaded',()=>{
+ ['q','type','month'].forEach(id=>document.querySelector('#'+id)?.addEventListener('input',render));
+ load().catch(e=>{document.querySelector('#status').textContent='error';document.querySelector('#out').innerHTML='<div class="empty">'+esc(e.message)+'</div>'});
+});
 </script>
 </body>
 </html>
