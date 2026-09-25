@@ -1,9 +1,14 @@
-name: Crawl October Festivals
+name: Update Monthly Festival Data
 
 on:
   workflow_dispatch:
+    inputs:
+      month:
+        description: "Target month YYYY-MM (blank = current month)"
+        required: false
+        type: string
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "17 0 1 * *"
 
 permissions:
   contents: write
@@ -14,25 +19,131 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Crawl October festival sources
+      - name: Crawl festival sources
         env:
-          GH_TOKEN: ${{ github.token }}
+          TARGET_MONTH: ${{ inputs.month }}
         run: |
-          mkdir -p data
           python - <<'PY'
+          import hashlib
+          import html
           import json
+          import os
+          import re
+          from datetime import datetime, timezone
           from pathlib import Path
+          from urllib.parse import urljoin, urlparse
           from urllib.request import Request, urlopen
 
-          domains = Path("domain.yaml")
-          print("domain.yaml:", domains.exists())
-          print("October crawl placeholder: source domains will be read from domain.yaml")
+          now = datetime.now(timezone.utc)
+          target = os.environ.get("TARGET_MONTH") or now.strftime("%Y-%m")
+          if not re.fullmatch(r"\d{4}-\d{2}", target):
+              raise SystemExit(f"invalid month: {target}")
+          year, month = map(int, target.split("-"))
+          if not 1 <= month <= 12:
+              raise SystemExit(f"invalid month: {target}")
+
+          domain_file = Path("domain.yaml")
+          if not domain_file.exists():
+              raise SystemExit("domain.yaml is required")
+
+          urls = []
+          for line in domain_file.read_text(encoding="utf-8").splitlines():
+              line = line.strip()
+              if line.startswith("- url:"):
+                  url = line.split(":", 1)[1].strip().strip('"').strip("'")
+                  if url.startswith(("http://", "https://")):
+                      urls.append(url)
+
+          if not urls:
+              raise SystemExit("no source URLs in domain.yaml")
+
+          out = Path("data/monthly") / f"{target}.jsonl"
+          out.parent.mkdir(parents=True, exist_ok=True)
+
+          month_patterns = [
+              rf"{year}年{month}月",
+              rf"{month}月",
+              rf"{year}[-/.]{month:02d}",
+              rf"{year}[-/.]{month}(?!\d)",
+              rf"\b{month:02d}/",
+              rf"\b{month}/",
+          ]
+          month_re = re.compile("|".join(month_patterns), re.I)
+          seen = set()
+          rows = []
+
+          def fetch(url):
+              req = Request(url, headers={"User-Agent": "bonsai-festivals-monthly-crawler/1.0"})
+              with urlopen(req, timeout=20) as r:
+                  return r.read().decode("utf-8", "ignore")
+
+          def strip_html(src):
+              src = re.sub(r"(?is)<script.*?</script>|<style.*?</style>|<noscript.*?</noscript>", " ", src)
+              src = re.sub(r"(?s)<[^>]+>", " ", src)
+              return re.sub(r"\s+", " ", html.unescape(src)).strip()
+
+          def links(src, base):
+              found = []
+              for href in re.findall(r'''href=["']([^"']+)["']''', src, re.I):
+                  u = urljoin(base, href)
+                  p = urlparse(u)
+                  if p.scheme in ("http", "https") and p.netloc == urlparse(base).netloc:
+                      found.append(u.split("#", 1)[0])
+              return list(dict.fromkeys(found))[:30]
+
+          for source in urls:
+              try:
+                  home = fetch(source)
+                  candidates = [source] + links(home, source)
+              except Exception as e:
+                  print(f"source failed: {source}: {e}")
+                  continue
+
+              for page in candidates:
+                  try:
+                      raw = home if page == source else fetch(page)
+                  except Exception as e:
+                      print(f"page failed: {page}: {e}")
+                      continue
+
+                  text = strip_html(raw)
+                  match = month_re.search(text)
+                  if not match:
+                      continue
+
+                  title_match = re.search(r"(?is)<title[^>]*>(.*?)</title>", raw)
+                  title = strip_html(title_match.group(1)) if title_match else ""
+                  snippet = text[max(0, match.start()-220):match.end()+320]
+
+                  key = hashlib.sha256(page.encode()).hexdigest()[:16]
+                  if key in seen:
+                      continue
+                  seen.add(key)
+
+                  rows.append({
+                      "id": f"{target}-{key}",
+                      "month": target,
+                      "name": title or urlparse(page).path.strip("/") or urlparse(page).netloc,
+                      "type": "festival",
+                      "official_url": page,
+                      "source_url": source,
+                      "month_evidence": match.group(0),
+                      "snippet": snippet,
+                      "crawled_at": now.isoformat(),
+                  })
+
+          rows.sort(key=lambda x: (x["name"], x["official_url"]))
+          out.write_text(
+              "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+              encoding="utf-8",
+          )
+          print(f"target={target} sources={len(urls)} records={len(rows)} output={out}")
           PY
 
-      - name: Commit changes
+      - name: Commit monthly data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/
-          git diff --cached --quiet || git commit -m "chore: crawl October festivals"
+          git add data/monthly/
+          git diff --cached --quiet || git commit -m "data: update monthly festival data"
           git push
