@@ -1,0 +1,8 @@
+# Crawl source registry
+# Keep source URLs here; festival entities remain in data/festivals.jsonl.
+sources:
+  - url: "https://www.tenkamatsuri.jp/"
+  - url: "https://ozorafestival.eu/"
+  - url: "https://www.boomfestival.org/"
+  - url: "https://www.envisionfestival.com/"
+  - url: "https://rainbowserpent.net/"
